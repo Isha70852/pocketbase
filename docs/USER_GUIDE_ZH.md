@@ -146,6 +146,291 @@ file_url = client.get_file_url(record, record.image)
 
 `query_params` 可附加縮圖、token 等參數：`get_file_url(record, filename, {"thumb": "100x100"})`。
 
+## 實戰範例：醫院藥局排班手冊（含 Python/官方 JavaScript 寫法）
+
+以下以「醫院藥局排班系統」為例，示範如何在 PocketBase 中完成常見的排班操作，並同時提供 Python 及官方 JavaScript SDK 的寫法供對照。假設有以下集合：
+
+- `pharmacists`：藥師基本資料（`name`、`department`、`license_no`、`is_active` 等）。
+- `departments`：部門列表（門診/住院/調劑等）。
+- `shifts`：排班主表，欄位包含 `pharmacist`（Relation 到 `pharmacists`）、`department`、`date`、`shift_type`（早/中/晚/大夜）、`status`（draft/published/leave）、`note`。
+- `leave_requests`：請假/代班申請（`pharmacist`、`start_date`、`end_date`、`reason`、`status`）。
+
+> PocketBase 的欄位可依實際需要調整，以下範例聚焦操作流程與 API 用法。
+
+### 初始化客戶端
+
+```python
+from pocketbase import PocketBase
+
+client = PocketBase("http://127.0.0.1:8090")
+```
+
+```javascript
+import PocketBase from 'pocketbase'
+
+const client = new PocketBase('http://127.0.0.1:8090')
+```
+
+### 1. 取出指定日期區間的排班
+
+查詢 2024-07-01 到 2024-07-07 的藥師排班，並展開藥師與部門名稱。
+
+```python
+schedule = client.collection("shifts").get_list(
+    1,
+    200,
+    query_params={
+        "filter": 'date >= "2024-07-01" && date <= "2024-07-07"',
+        "expand": "pharmacist,department",
+        "sort": "date,shift_type",
+    },
+)
+
+for shift in schedule.items:
+    pharmacist = shift.expand.get("pharmacist")
+    dept = shift.expand.get("department")
+    print(shift.date, shift.shift_type, pharmacist.name, dept.name)
+```
+
+```javascript
+const schedule = await client.collection('shifts').getList(1, 200, {
+  filter: 'date >= "2024-07-01" && date <= "2024-07-07"',
+  expand: 'pharmacist,department',
+  sort: 'date,shift_type',
+})
+
+schedule.items.forEach((shift) => {
+  const pharmacist = shift.expand?.pharmacist
+  const dept = shift.expand?.department
+  console.log(shift.date, shift.shift_type, pharmacist?.name, dept?.name)
+})
+```
+
+### 2. 建立新排班（單筆或批量）
+
+新增 2024-07-02 早班的排班資料；若要一次新增多筆，可使用 `create_bulk`（Python）或 `create` 搭配陣列（JS）。
+
+```python
+service = client.collection("shifts")
+
+created = service.create({
+    "pharmacist": "pharmacist_id",
+    "department": "dept_id",
+    "date": "2024-07-02",
+    "shift_type": "morning",
+    "status": "draft",
+})
+
+# 批量新增（避免逐筆往返）
+service.create_bulk([
+    {
+        "pharmacist": "ph1",
+        "department": "dept_opd",
+        "date": "2024-07-03",
+        "shift_type": "evening",
+        "status": "draft",
+    },
+    {
+        "pharmacist": "ph2",
+        "department": "dept_ipd",
+        "date": "2024-07-03",
+        "shift_type": "night",
+        "status": "draft",
+    },
+])
+```
+
+```javascript
+const service = client.collection('shifts')
+
+const created = await service.create({
+  pharmacist: 'pharmacist_id',
+  department: 'dept_id',
+  date: '2024-07-02',
+  shift_type: 'morning',
+  status: 'draft',
+})
+
+// JS SDK 沒有 create_bulk，但可以用 Promise.all 一次送出多筆
+await Promise.all([
+  service.create({
+    pharmacist: 'ph1',
+    department: 'dept_opd',
+    date: '2024-07-03',
+    shift_type: 'evening',
+    status: 'draft',
+  }),
+  service.create({
+    pharmacist: 'ph2',
+    department: 'dept_ipd',
+    date: '2024-07-03',
+    shift_type: 'night',
+    status: 'draft',
+  }),
+])
+```
+
+### 3. 修改排班或換班
+
+將某筆排班的 `pharmacist` 改為另一位藥師，並加上備註。
+
+```python
+updated = client.collection("shifts").update(
+    "shift_id",
+    {
+        "pharmacist": "new_pharmacist_id",
+        "note": "門診請求互換",
+    },
+)
+```
+
+```javascript
+const updated = await client.collection('shifts').update('shift_id', {
+  pharmacist: 'new_pharmacist_id',
+  note: '門診請求互換',
+})
+```
+
+### 4. 請假與代班
+
+在請假單集合寫入請假紀錄，並更新排班狀態為 `leave`，同時指派代班人員。
+
+```python
+leave = client.collection("leave_requests").create({
+    "pharmacist": "ph1",
+    "start_date": "2024-07-05",
+    "end_date": "2024-07-05",
+    "reason": "家庭事假",
+    "status": "approved",
+})
+
+client.collection("shifts").update(
+    "shift_id",
+    {
+        "status": "leave",
+        "pharmacist": "cover_pharmacist_id",
+        "note": "代班：張藥師",
+    },
+)
+```
+
+```javascript
+const leave = await client.collection('leave_requests').create({
+  pharmacist: 'ph1',
+  start_date: '2024-07-05',
+  end_date: '2024-07-05',
+  reason: '家庭事假',
+  status: 'approved',
+})
+
+await client.collection('shifts').update('shift_id', {
+  status: 'leave',
+  pharmacist: 'cover_pharmacist_id',
+  note: '代班：張藥師',
+})
+```
+
+### 5. 查詢排班缺口與部門覆蓋率
+
+利用 `filter` 檢查某日期、部門的班別是否已排滿（例如早中晚都需要一名）。
+
+```python
+needed_shifts = {"morning", "evening", "night"}
+existing = client.collection("shifts").get_full_list(
+    query_params={
+        "filter": 'date = "2024-07-06" && department = "dept_opd"',
+    },
+)
+
+assigned_types = {s.shift_type for s in existing}
+missing = needed_shifts - assigned_types
+print("缺少班別：", missing)
+```
+
+```javascript
+const existing = await client.collection('shifts').getFullList({
+  filter: 'date = "2024-07-06" && department = "dept_opd"',
+})
+
+const assignedTypes = new Set(existing.map((s) => s.shift_type))
+const needed = new Set(['morning', 'evening', 'night'])
+const missing = [...needed].filter((t) => !assignedTypes.has(t))
+console.log('缺少班別：', missing)
+```
+
+### 6. 發佈或鎖定排班
+
+將草稿排班統一更新為已發佈（`published`），避免被誤改：
+
+```python
+drafts = client.collection("shifts").get_full_list(
+    query_params={"filter": 'status = "draft" && date >= "2024-07-01"'},
+)
+
+for draft in drafts:
+    client.collection("shifts").update(draft.id, {"status": "published"})
+```
+
+```javascript
+const drafts = await client.collection('shifts').getFullList({
+  filter: 'status = "draft" && date >= "2024-07-01"',
+})
+
+await Promise.all(
+  drafts.map((draft) =>
+    client.collection('shifts').update(draft.id, { status: 'published' }),
+  ),
+)
+```
+
+### 7. 即時監控排班異動
+
+訂閱 `shifts` 集合，當有新增/修改/刪除時即時通知排班管理員。
+
+```python
+def on_shift_change(msg):
+    print("排班異動：", msg["action"], msg.get("record"))
+
+sub_id = client.collection("shifts").subscribe(on_shift_change)
+
+# ...需要時取消訂閱
+client.collection("shifts").unsubscribe(sub_id)
+```
+
+```javascript
+const unsubscribe = await client.collection('shifts').subscribe('*', (msg) => {
+  console.log('排班異動：', msg.action, msg.record)
+})
+
+// 需要時呼叫 unsubscribe()
+```
+
+### 8. 匯出排班（例如 CSV）
+
+可由 `shifts` 集合查詢後自行轉成 CSV，以下以 Python 為例：
+
+```python
+import csv
+
+items = client.collection("shifts").get_full_list(
+    query_params={
+        "filter": 'date >= "2024-07-01" && date <= "2024-07-31"',
+        "expand": "pharmacist,department",
+        "sort": "date,shift_type",
+    },
+)
+
+with open("pharmacy_schedule_2024_07.csv", "w", newline="", encoding="utf-8") as f:
+    writer = csv.writer(f)
+    writer.writerow(["日期", "班別", "藥師", "部門", "備註"])
+    for s in items:
+        p = s.expand.get("pharmacist")
+        d = s.expand.get("department")
+        writer.writerow([s.date, s.shift_type, p.name, d.name, s.note or ""])
+```
+
+> JS 端可使用陣列轉換成 CSV 字串或導入 `papaparse`/`json2csv` 等工具；PocketBase 只負責資料查詢與存取。
+
 ## 其他服務
 
 - **Collections**：`client.collections` 取得/建立/更新集合定義。
