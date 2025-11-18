@@ -64,6 +64,12 @@ client = Client(auto_snake_case=False)
 # Fields will keep their original names from the API
 ```
 
+---
+
+## 中文新手指南
+
+社群撰寫的完整中文教學，涵蓋與官方 JavaScript SDK 的差異、資料 CRUD、篩選、檔案上傳與即時訂閱，詳見 [docs/USER_GUIDE_ZH.md](docs/USER_GUIDE_ZH.md)。
+
 ## Development
 
 These are the requirements for local development:
